@@ -1,0 +1,21 @@
+name: Refresh data
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 9 5 1,4,7,10 *"
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    timeout-minutes: 340
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - run: pip install duckdb "psycopg[binary]"
+      - run: python pipeline/import_cms.py
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+          SPUF_URL: ${{ secrets.SPUF_URL }}
+      - run: python pipeline/rxnorm_names.py
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
