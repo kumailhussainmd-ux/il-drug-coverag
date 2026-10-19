@@ -22,24 +22,29 @@ def unpack(path):
     return [f for f in glob.glob(out + "/**/*", recursive=True)
             if os.path.isfile(f) and not f.lower().endswith(".zip")]
 
-def find(files, must, nope=()):
+def find(files, must, nope=(), many=False):
     hit = [f for f in files if all(k in os.path.basename(f).lower() for k in must)
            and not any(k in os.path.basename(f).lower() for k in nope)
            and "sample" not in f.lower()]
-    if len(hit) != 1:
+    if not hit or (len(hit) != 1 and not many):
         sys.exit(f"Expected exactly one file matching {must}, found {hit}.\nAll files:\n" + "\n".join(files))
-    return hit[0]
+    return sorted(hit) if many else hit[0]
 
 def main():
     files = unpack(get_zip())
     src = {"p": find(files, ["plan", "information"]), "f": find(files, ["basic", "drugs"]),
-           "c": find(files, ["beneficiary", "cost"], ["insulin"]), "n": find(files, ["pharmacy", "network"]),
+           "c": find(files, ["beneficiary", "cost"], ["insulin"]), "n": find(files, ["pharmacy", "network"], many=True),
            "pr": find(files, ["pricing"]), "i": find(files, ["insulin"])}
     print("Using files:", src)
     db = duckdb.connect(os.path.join(WORK, "build.duckdb"))
-    for k, path in src.items():  # read everything as text, whitespace trimmed
+    for k, paths in src.items():  # read everything as text, whitespace trimmed; some files come in several parts
+        paths = paths if isinstance(paths, list) else [paths]
+        opts = "delim='|', all_varchar=true, quote=''"
+        names = [d[0] for d in db.execute(f"SELECT * FROM read_csv('{paths[0]}', header=true, {opts}) LIMIT 0").description]
+        plist = "[" + ", ".join(f"'{p}'" for p in paths) + "]"
         db.execute(f"""CREATE OR REPLACE TABLE {k}_raw AS
-          SELECT trim(COLUMNS(*)) FROM read_csv('{path}', delim='|', header=true, all_varchar=true, quote='')""")
+          SELECT trim(COLUMNS(*)) FROM read_csv({plist}, header=false, names={names!r}, {opts})
+          WHERE upper(trim({names[0]})) <> '{names[0].upper()}'""")  # drops repeated header rows
     K = "contract_id, plan_id, segment_id"
     db.execute(f"""CREATE OR REPLACE TABLE plans AS SELECT DISTINCT contract_id, plan_id, segment_id,
         contract_name, plan_name, formulary_id, TRY_CAST(premium AS DOUBLE) AS premium,
